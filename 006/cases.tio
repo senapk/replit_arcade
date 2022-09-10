@@ -1,0 +1,260 @@
+>>>>>>>> inicio
+init 20 10 15
+show
+init 10 20 50
+show
+end
+========
+$init 20 10 15
+$show
+E:20/20, S:10/10, L:15/15, D:0, I:0
+$init 10 20 50
+$show
+E:10/10, S:20/20, L:50/50, D:0, I:0
+$end
+<<<<<<<<
+
+>>>>>>>> play - Brincar
+init 20 10 15
+play
+show
+play
+show
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$end
+<<<<<<<<
+
+>>>>>>>> comer
+init 20 10 15
+play
+show
+play
+show
+eat
+show
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$eat
+$show
+E:15/20, S:10/10, L:7/15, D:2, I:3
+$end
+<<<<<<<<
+
+>>>>>>>> dormir
+init 20 10 15
+play
+show
+play
+show
+eat
+show
+sleep
+show
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$eat
+$show
+E:15/20, S:10/10, L:7/15, D:2, I:3
+$sleep
+$show
+E:20/20, S:9/10, L:7/15, D:2, I:8
+$end
+<<<<<<<<
+
+>>>>>>>> tomar banho
+init 20 10 15
+play
+show
+play
+show
+eat
+show
+sleep
+show
+clean
+show
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$eat
+$show
+E:15/20, S:10/10, L:7/15, D:2, I:3
+$sleep
+$show
+E:20/20, S:9/10, L:7/15, D:2, I:8
+$clean
+$show
+E:17/20, S:8/10, L:15/15, D:2, I:10
+$end
+<<<<<<<<
+
+>>>>>>>> dormir sem sono
+init 20 10 15
+play
+show
+play
+show
+eat
+show
+sleep
+show
+clean
+show
+sleep
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$eat
+$show
+E:15/20, S:10/10, L:7/15, D:2, I:3
+$sleep
+$show
+E:20/20, S:9/10, L:7/15, D:2, I:8
+$clean
+$show
+E:17/20, S:8/10, L:15/15, D:2, I:10
+$sleep
+fail: nao esta com sono
+$end
+<<<<<<<<
+
+>>>>>>>> morrer
+init 20 10 15
+play
+show
+play
+show
+eat
+show
+sleep
+show
+clean
+show
+sleep
+play
+play
+play
+play
+show
+play
+show
+play
+eat
+clean
+sleep
+end
+========
+$init 20 10 15
+$play
+$show
+E:18/20, S:9/10, L:12/15, D:1, I:1
+$play
+$show
+E:16/20, S:8/10, L:9/15, D:2, I:2
+$eat
+$show
+E:15/20, S:10/10, L:7/15, D:2, I:3
+$sleep
+$show
+E:20/20, S:9/10, L:7/15, D:2, I:8
+$clean
+$show
+E:17/20, S:8/10, L:15/15, D:2, I:10
+$sleep
+fail: nao esta com sono
+$play
+$play
+$play
+$play
+$show
+E:9/20, S:4/10, L:3/15, D:6, I:14
+$play
+fail: pet morreu de sujeira
+$show
+E:7/20, S:3/10, L:0/15, D:7, I:15
+$play
+fail: pet esta morto
+$eat
+fail: pet esta morto
+$clean
+fail: pet esta morto
+$sleep
+fail: pet esta morto
+$end
+<<<<<<<<
+
+>>>>>>>> exemplo2
+init 5 10 10
+play
+play
+play
+play
+show
+end
+========
+$init 5 10 10
+$play
+$play
+$play
+fail: pet morreu de fraqueza
+$play
+fail: pet esta morto
+$show
+E:0/5, S:7/10, L:1/10, D:3, I:3
+$end
+<<<<<<<<
+
+>>>>>>>> exemplo3
+init 10 3 10
+play
+play
+play
+play
+show
+end
+========
+$init 10 3 10
+$play
+$play
+$play
+fail: pet morreu de fome
+$play
+fail: pet esta morto
+$show
+E:4/10, S:0/3, L:1/10, D:3, I:3
+$end
+<<<<<<<<
