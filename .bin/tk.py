@@ -24,6 +24,7 @@ import urllib.request
 import urllib.error
 import json
 from subprocess import PIPE
+import configparser
 
 asc2only: bool = False
 
@@ -77,11 +78,40 @@ Symbol.set_asc_only(asc2only)  # inicalizacao estatica
 
 class Solver:
     def __init__(self, path):
-        self.path: str = path
+        self.path: str = Solver.__add_dot_bar(path)
         self.filename: str = path.split(os.sep)[-1]
         self.user: List[Optional[str]] = []
         self.result: ExecutionResult = ExecutionResult.UNTESTED
         self.error_msg: str = ""
+        self.executable: str = ""
+        self.rm_executable: bool = False
+        self.prepare_exec()
+
+
+    def prepare_exec(self) -> None:
+        path = self.path
+        if " " in path:  # more than one parameter
+            self.executable = path
+        elif path.endswith(".py"):
+            self.executable = "python " + path
+        elif path.endswith(".js"):
+            self.executable = "node " + path
+        elif path.endswith(".ts"):
+            self.executable = "ts-node " + path
+        elif path.endswith(".java"):
+            self.executable = Solver.__prepare_java(path)
+            self.rm_executable = True
+        elif path.endswith(".c"):
+            self.executable = Solver.__prepare_c(path)
+            self.rm_executable = True
+        elif path.endswith(".hs"):
+            solver_cmd = Solver.__prepare_hs(path)
+            self.rm_executable = True
+        elif path.endswith(".cpp"):
+            self.executable = Solver.__prepare_cpp(path)
+            self.rm_executable = True
+        else:
+            self.executable = path
 
     def get_mark(self):
         return self._get_mark()
@@ -98,6 +128,72 @@ class Solver:
         elif self.result == ExecutionResult.EXECUTION_ERROR:
             return Symbol.execution
         return Symbol.failure
+
+    @staticmethod
+    def __prepare_java(solver: str) -> str:
+        cmd = ["javac", solver, '-d', '.']
+        return_code, stdout, stderr = Runner.subprocess_run(cmd)
+        print(stdout)
+        print(stderr)
+        if return_code != 0:
+            raise Runner.CompileError(stdout + stderr)
+        solver = solver.split(os.sep)[-1]  # getting only the filename
+        return "java " + solver[:-5]  # removing the .java
+
+    @staticmethod
+    def __prepare_multiple_files(solver: str) -> List[str]:
+        return list(map(Solver.__add_dot_bar, solver.split(Identifier.multi_file_separator)))
+
+    @staticmethod
+    def __prepare_hs(solver: str) -> str:
+        solver_files = Solver.__prepare_multiple_files(solver)
+        source_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.hs"])
+        exec_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.out"])
+        with open(source_path, "w") as f:
+            for solver in solver_files:
+                f.write(open(solver).read() + "\n")
+
+        cmd = ["ghc", "--make", source_path, "-o", exec_path]
+        return_code, stdout, stderr = Runner.subprocess_run(cmd)
+        print(stdout)
+        print(stderr)
+        if return_code != 0:
+            raise Runner.CompileError(stdout + stderr)
+        return exec_path
+
+    @staticmethod
+    def __prepare_c_cpp(solver: str, pre_args: List[str], pos_args: list[str]) -> str:
+        solver_files = Solver.__prepare_multiple_files(solver)
+        exec_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.out"])
+        cmd = pre_args + solver_files + ["-o", exec_path] + pos_args
+        return_code, stdout, stderr = Runner.subprocess_run(cmd)
+        print(stdout)
+        print(stderr)
+        if return_code != 0:
+            raise Runner.CompileError(stdout + stderr)
+        return exec_path
+
+    @staticmethod
+    def __prepare_c(solver: str) -> str:
+        # pre = ["gcc", "-Wall", "-fsanitize=address", "-Wuninitialized", "-Wparentheses", "-Wreturn-type", "-fno-diagnostics-color"] 
+        pre = ["gcc", "-Wall"]
+        pos = ["-lm", "-lutil"]
+        return Solver.__prepare_c_cpp(solver, pre, pos)
+
+    @staticmethod
+    def __prepare_cpp(solver: str) -> str:
+        # pre = ["g++", "-std=c++20", "-Wall", "-g", "-fsanitize=address", "-fsanitize=undefined", "-D_GLIBCXX_DEBUG"] # muito lento no replit
+        pre = ["g++", "-std=c++20", "-Wall", "-Wextra"]
+        pos = []
+        print("debug1")
+        return Solver.__prepare_c_cpp(solver, pre, pos)
+
+    @staticmethod
+    def __add_dot_bar(solver: str) -> str:
+        if os.sep not in solver and os.path.isfile("." + os.sep + solver):
+            solver = "." + os.sep + solver
+        return solver
+
 
 
 class IOBuffer:
@@ -433,7 +529,7 @@ class Param:
             self.is_raw: bool = False
             self.keep = False
             self.display = False
-            self.is_vertical = False
+            self.is_up_down = False
             self.diff_mode = DiffMode.FIRST
 
         def set_index(self, value: Optional[int]):
@@ -448,8 +544,8 @@ class Param:
             self.is_raw = value
             return self
 
-        def set_vertical(self, value: bool):
-            self.is_vertical = value
+        def set_up_down(self, value: bool):
+            self.is_up_down = value
             return self
 
         def set_keep(self, value: bool):
@@ -474,17 +570,17 @@ class Param:
 class Wdir:
     def __init__(self, folder: str):
         self.folder = folder
-        self.solver_list: Optional[List[Solver]] = None
+        self.solver: Optional[Solver] = None
         self.source_list: List[str] = []
         self.pack_list: List[List[Unit]] = []
         self.unit_list: List[Unit] = []
 
-    def sources(self, sources: List[str]):
+    def set_sources(self, sources: List[str]):
         self.source_list = sources
         return self
 
-    def solvers(self, solvers: List[str]):
-        self.solver_list = [Solver(solver) for solver in solvers]
+    def set_solver(self, solver: str):
+        self.solver = Solver(solver)
         return self
 
     def load_sources(self):
@@ -509,7 +605,10 @@ class Wdir:
             if file.lower().startswith("solver"):
                 s_list.append(file)
         s_list = sorted(s_list)
-        self.solver_list = [Solver(os.path.join(self.folder, file)) for file in s_list]
+        if len(s_list) == 0:
+            self.solver = None
+        else:
+            self.solver = Solver(os.path.join(self.folder, s_list[0]))
         return self
 
     def parse_sources(self):
@@ -584,11 +683,9 @@ class Wdir:
             return ", ".join(out)
 
         def resume_solvers() -> str:
-            if self.solver_list is None:
+            if self.solver is None:
                 return ""
-            if len(self.solver_list) == 0:
-                return Symbol.failure
-            return ", ".join([solver.get_mark() + solver.filename for solver in self.solver_list])
+            return self.solver.get_mark() + self.solver.filename
         return [self.folder, resume_count(), resume_sources(), resume_solvers()]
 
 
@@ -653,98 +750,6 @@ class Runner:
         stdout, stderr = p.communicate(input=input_data)
         return p.returncode, stdout, stderr
 
-
-class Compiler:
-
-    def __init__(self):
-        pass
-
-    @staticmethod
-    def __prepare_java(solver: str) -> str:
-        cmd = ["javac", solver, '-d', '.']
-        return_code, stdout, stderr = Runner.subprocess_run(cmd)
-        if return_code != 0:
-            raise Runner.CompileError(stdout + stderr)
-        solver = solver.split(os.sep)[-1]  # getting only the filename
-        return "java " + solver[:-5]  # removing the .java
-
-    @staticmethod
-    def __prepare_multiple_files(solver: str) -> List[str]:
-        return list(map(Compiler.add_dot_bar, solver.split(Identifier.multi_file_separator)))
-
-    @staticmethod
-    def __prepare_hs(solver: str) -> str:
-        solver_files = Compiler.__prepare_multiple_files(solver)
-        source_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.hs"])
-        exec_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.out"])
-        with open(source_path, "w") as f:
-            for solver in solver_files:
-                f.write(open(solver).read() + "\n")
-
-        cmd = ["ghc", "--make", source_path, "-o", exec_path]
-        return_code, stdout, stderr = Runner.subprocess_run(cmd)
-        if return_code != 0:
-            raise Runner.CompileError(stdout + stderr)
-        return exec_path
-
-    @staticmethod
-    def __prepare_c_cpp(solver: str, pre_args: List[str], pos_args: list[str]) -> str:
-        solver_files = Compiler.__prepare_multiple_files(solver)
-        exec_path = os.sep.join(solver_files[0].split(os.sep)[:-1] + [".a.out"])
-        cmd = pre_args + solver_files + ["-o", exec_path] + pos_args
-        return_code, stdout, stderr = Runner.subprocess_run(cmd)
-        if return_code != 0:
-            raise Runner.CompileError(stdout + stderr)
-        return exec_path
-
-    @staticmethod
-    def __prepare_c(solver: str) -> str:
-        pre = ["gcc", "-Wall", "-fsanitize=address", "-Wuninitialized", "-Wparentheses", "-Wreturn-type",
-               "-fno-diagnostics-color"]
-        pos = ["-lm", "-lutil"]
-        return Compiler.__prepare_c_cpp(solver, pre, pos)
-
-    @staticmethod
-    def __prepare_cpp(solver: str) -> str:
-        pre = ["g++", "-std=c++20", "-Wall", "-g", "-fsanitize=address", "-fsanitize=undefined",
-               "-D_GLIBCXX_DEBUG"]
-        pos = []
-        return Compiler.__prepare_c_cpp(solver, pre, pos)
-
-    @staticmethod
-    def add_dot_bar(solver: str) -> str:
-        if os.sep not in solver and os.path.isfile("." + os.sep + solver):
-            solver = "." + os.sep + solver
-        return solver
-
-    @staticmethod
-    def prepare_exec(solver: str) -> Tuple[str, bool]:
-        # if PreScript.exists():
-        #    solver = PreScript.process_solver(solver)
-
-        solver = Compiler.add_dot_bar(solver)
-        if " " in solver:  # more than one parameter
-            return solver, False
-        elif solver.endswith(".py"):
-            return "python " + solver, False
-        elif solver.endswith(".js"):
-            return "node " + solver, False
-        elif solver.endswith(".java"):
-            solver_cmd = Compiler.__prepare_java(solver)
-            return solver_cmd, True
-        elif solver.endswith(".c"):
-            solver_cmd = Compiler.__prepare_c(solver)
-            return solver_cmd, True
-        elif solver.endswith(".hs"):
-            solver_cmd = Compiler.__prepare_hs(solver)
-            return solver_cmd, False
-        elif solver.endswith(".cpp"):
-            solver_cmd = Compiler.__prepare_cpp(solver)
-            return solver_cmd, True
-        else:
-            return solver, False
-
-
 class IdentifierType(Enum):
     WDIR = "WORKING DIR"
     OBI = "OBI"
@@ -790,12 +795,14 @@ class Identifier:
         return out
 
     @staticmethod
-    def split_input_list(input_list: List[str]) -> Tuple[List[str], List[str]]:
+    def split_input_list(input_list: List[str]) -> Tuple[str, List[str]]:
         input_list = Identifier.join_multi_file_solvers(input_list)
 
         solvers = [target for target in input_list if Identifier.get_type(target) == IdentifierType.SOLVER]
         sources = [target for target in input_list if target not in solvers]
-        return solvers, sources
+
+        solver = None if len(solvers) == 0 else solvers[0]
+        return solver, sources
 
     @staticmethod
     def mount_wdir_list(target_list: List[str], folders: List[str], param: Param.Basic) -> List[Wdir]:
@@ -805,7 +812,7 @@ class Identifier:
         if len(target_list) == 0 and folders is None:
             folders = ["."]
         if sources or solvers:
-            wdir_list.append(Wdir(".").sources(sources).solvers(solvers).parse_sources().filter(param.index))
+            wdir_list.append(Wdir(".").set_sources(sources).set_solver(solvers).parse_sources().filter(param.index))
         if folders is not None:
             wdir_list += [Wdir(f).load_solvers().load_sources().parse_sources().filter(param.index) for f in folders]
         return wdir_list
@@ -834,21 +841,20 @@ class Execution:
 
     @staticmethod
     def __exec_and_check(solver: Solver, unit_list: List[Unit], keep: bool = False) -> None:
-        exec_cmd, is_temp_file = Compiler.prepare_exec(solver.path)
         for _i in range(len(unit_list)):
             solver.user.append(None)
         for i in range(len(unit_list)):
-            solver.user[i] = Execution.__execute_single_case(exec_cmd, unit_list[i].input)
+            solver.user[i] = Execution.__execute_single_case(solver.executable, unit_list[i].input)
             if solver.user[i] == unit_list[i].output:
                 Logger.write(Symbol.get_core_symbol(Symbol.success))
             else:
                 Logger.write(Symbol.get_core_symbol(Symbol.failure))
-        if is_temp_file and not keep:
-            if exec_cmd.startswith("java "):
+        if solver.rm_executable and not keep:
+            if solver.executable.startswith("java "):
                 for x in [item for item in os.listdir(".") if item.endswith(".class")]:
                     os.remove(x)
             else:
-                os.remove(exec_cmd)
+                os.remove(solver.executable)
 
     @staticmethod
     def __check_all_answers_right(solver: Solver, unit_list: List[Unit]) -> bool:
@@ -998,25 +1004,32 @@ class Report:
         return "\n".join(["".join(line) for line in data])
 
     @staticmethod
-    def show_unit_list(user_list: Optional[List[str]], unit_list: List[Unit], is_raw: bool, is_vertical: bool) -> str:
+    def show_unit_list(user_list: Optional[List[str]], unit_list: List[Unit], is_raw: bool, is_up_down: bool) -> str:
         output = io.StringIO()
-        _user_list = user_list if user_list else [None] * len(unit_list)
+        _user_list = user_list if user_list is not None else [None] * len(unit_list)
         for user, unit in zip(_user_list, unit_list):
-            output.write(Report.__show_unit(user, unit, is_raw, is_vertical))
-        if is_raw or not user_list or is_vertical:
+            output.write(Report.__show_unit(user, unit, is_raw, is_up_down))
+        if is_raw or (user_list is None) or is_up_down:
             output.write(Report.centralize(Symbol.hbar, Symbol.hbar) + "\n")
         else:
             output.write(Report.centralize("   ", Symbol.hbar, " ", " ") + "\n")
         return output.getvalue()
 
     @staticmethod
-    def __show_unit(user: Optional[str], unit: Unit, is_raw: bool = False, is_vertical: bool = False) -> str:
+    def __show_unit(user: Optional[str], unit: Unit, is_raw: bool = False, is_up_down: bool = False) -> str:
 
-        def mount_side_title(left, right, filler=" ", middle=" "):
+        def mount_side_by_side(left, right, filler=" ", middle=" "):
             half = int(Report.get_terminal_size() / 2)
-            line = " " + left.center(half - 2, filler) + " "
+            line = ""
+            a = " " + left.center(half - 2, filler) + " "
+            if len(a) > half:
+                a = a[:half]
+            line += a
             line += middle
-            line += " " + right.center(half - 2, filler) + " "
+            b = " " + right.center(half - 2, filler) + " "
+            if len(b) > half:
+                b = b[:half]
+            line += b
             return line
 
         output = io.StringIO()
@@ -1029,24 +1042,24 @@ class Report:
         dotted = "-"
         vertical_separator = Symbol.vbar
 
-        if is_vertical or not str_user:
+        if is_up_down or (str_user is None):
             output.write(Report.centralize(Symbol.hbar, Symbol.hbar) + "\n")
             output.write(Report.centralize(title) + "\n")
             output.write(Report.centralize("PROGRAM INPUT", dotted) + "\n")
             output.write(str_input)
             output.write(Report.centralize("EXPECTED OUTPUT", dotted) + "\n")
             output.write(str_output)
-            if str_user:
+            if str_user is not None:
                 output.write(Report.centralize("USER OUTPUT", dotted) + "\n")
                 output.write(str_user)
                 if not str_user.endswith("\n"):
                     output.write("\n")
         else:
             output.write(Report.centralize("   ", Symbol.hbar, " ", " ") + "\n")
-            output.write(mount_side_title(title, title, " ", vertical_separator) + "\n")
-            output.write(mount_side_title(" INPUT ", " INPUT ", dotted, vertical_separator) + "\n")
+            output.write(mount_side_by_side(title, title, " ", vertical_separator) + "\n")
+            output.write(mount_side_by_side(" INPUT ", " INPUT ", dotted, vertical_separator) + "\n")
             output.write(Report.side_by_side(str_input, str_input, vertical_separator) + "\n")
-            output.write(mount_side_title(" EXPECTED OUTPUT ", " USER OUTPUT ", dotted, vertical_separator) + "\n")
+            output.write(mount_side_by_side(" EXPECTED OUTPUT ", " USER OUTPUT ", dotted, vertical_separator) + "\n")
             output.write(Report.side_by_side(str_output, str_user, vertical_separator) + "\n")
 
         return output.getvalue()
@@ -1291,15 +1304,13 @@ class ActionExecute:
             ActionExecute.print_resume_begin(resume, sizes)
             ActionExecute.print_solvers(wdir, sizes[3], False)
 
-            for solver in wdir.solver_list:
-                errors = ActionExecute.report_failure(solver, wdir.unit_list)
-                if errors != "":
-                    Logger.write(errors, relative=1)
-                diffs = ActionExecute.report_diffs(solver, wdir.unit_list, param)
-                if diffs != "":
-                    Logger.write(diffs)
-                if solver.result != ExecutionResult.SUCCESS and param.diff_mode == DiffMode.FIRST:
-                    break
+            errors = ActionExecute.report_failure(wdir.solver, wdir.unit_list)
+            if errors != "":
+                Logger.write(errors, relative=1)
+            diffs = ActionExecute.report_diffs(wdir.solver, wdir.unit_list, param)
+            if diffs != "":
+                Logger.write(diffs)
+
         return ActionExecute.calc_passed(wdir_list)
 
     @staticmethod
@@ -1310,14 +1321,13 @@ class ActionExecute:
 
     @staticmethod
     def print_solvers(wdir: Wdir, total_size: int, only_show: bool = False):
-        if len(wdir.solver_list) == 0:
+        if wdir.solver is None:
             Logger.write(" [" + Symbol.failure.center(total_size, Symbol.cfill) + "] " + Symbol.failure + "\n")
             return
-        for solver in wdir.solver_list:
-            Logger.write(" [")
-            if not only_show:
-                Execution.execute_solver(solver, wdir.unit_list)
-            Logger.write(" " + solver.filename + " " + solver.get_mark() + "]")
+        Logger.write(" [")
+        if not only_show:
+            Execution.execute_solver(wdir.solver, wdir.unit_list)
+        Logger.write(" " + wdir.solver.filename + " " + wdir.solver.get_mark() + "]")
         Logger.write("\n")
 
     @staticmethod
@@ -1351,7 +1361,7 @@ class ActionExecute:
                 new_unit = [new_unit[0]]
             else:
                 output.write(Report.centralize("MODE: ALL FAILURES") + "\n")
-            output.write(Report.show_unit_list(new_user, new_unit, param.is_raw, param.is_vertical))
+            output.write(Report.show_unit_list(new_user, new_unit, param.is_raw, param.is_up_down))
         return output.getvalue()
 
     @staticmethod
@@ -1359,9 +1369,8 @@ class ActionExecute:
         output: List[Tuple[str, int, List[Tuple[str, int]]]] = []
         for wdir in wdir_list:
             wdir_out: List[Tuple[str, int]] = []
-            for solver in wdir.solver_list:
-                passed = len([unit for user, unit in zip(solver.user, wdir.unit_list) if user == unit.output])
-                wdir_out.append((solver.filename, passed))
+            passed = len([unit for user, unit in zip(wdir.solver.user, wdir.unit_list) if user == unit.output])
+            wdir_out.append((wdir.solver.filename, passed))
             output += [(wdir.folder, len(wdir.unit_list), wdir_out)]
         return output
 
@@ -1383,7 +1392,7 @@ class ActionList:
             if wdir.unit_list:
                 Logger.write(Report.format_header_list(None, wdir.unit_list, headers_filler) + '\n', relative=1)
             if param.display:
-                Logger.write(Report.show_unit_list(None, wdir.unit_list, param.is_raw, param.is_vertical), 0)
+                Logger.write(Report.show_unit_list(None, wdir.unit_list, param.is_raw, param.is_up_down), 0)
         return [(wdir.folder, len(wdir.unit_list)) for wdir in wdir_list]
 
     @staticmethod
@@ -1418,7 +1427,7 @@ class Actions:
     def build(target_out: str, source_list: List[str], param: Param.Manip, to_force: bool) -> bool:
         try:
             Logger.inc_level()
-            wdir = Wdir(".").sources(source_list).parse_sources()
+            wdir = Wdir(".").set_sources(source_list).parse_sources()
             wdir.manipulate(param)
             Writer.save_target(target_out, wdir.unit_list, to_force)
             Logger.dec_level()
@@ -1431,7 +1440,7 @@ class Actions:
     @staticmethod
     def update(target_list: List[str], param: Param.Manip, solver: Optional[str]) -> bool:
         for target in target_list:
-            wdir = Wdir(".").sources([target]).parse_sources()
+            wdir = Wdir(".").set_sources([target]).parse_sources()
             wdir.manipulate(param)
             if solver:
                 wdir.replace_input(Solver(solver))
@@ -1447,6 +1456,237 @@ class Actions:
         return True
 
 
+class ITable:
+    options_base = ["fup", "ed", "poo"]
+    options_term = ["40", "60", "80", "100", "120", "140", "160", "180", "200"]
+    options_view = ["side", "down"]
+    options_mark = ["show", "hide"]
+    options_exte = ["c", "cpp", "js", "ts", "py", "java", "hs"]
+
+    @staticmethod
+    def choose(intro, opt_list, par = ""):
+        if par in opt_list:
+            return par
+        print(intro + "[ " + ", ".join(opt_list) + " ]: ", end="")
+        value = input().lower()
+        if value not in opt_list:
+            return ITable.choose(intro, opt_list)
+        return value
+
+    @staticmethod
+    def cls():
+        # os.system('cls' if os.name == 'nt' else 'clear')
+        pass
+        
+    @staticmethod
+    def validate_label(label):
+        if len(label) != 3:
+            return False
+        for c in label:
+            if not c.isdigit():
+                return False
+        return True
+
+    @staticmethod
+    def choose_label(label = ""):
+        if ITable.validate_label(label):
+            return label
+        while True:
+            print("Label: @", end="")
+            label = input()
+            if ITable.validate_label(label):
+                break
+        return label
+
+    @staticmethod
+    def action_down(ui_list: List[str], base: str) -> str:
+        label = "" if len(ui_list) < 2 else ui_list[1]
+        label = ITable.choose_label(label)
+
+        ext = "" if len(ui_list) < 3 else ui_list[2]
+        ext = ITable.choose("Choose extension ", ITable.options_exte, ext)
+
+        print("{} {} {}".format(label, ext, base))
+        Main.down(base, label, ext)
+        return "down" + " " + label + " " + ext
+
+    @staticmethod
+    def action_run(ui_list, mark_mode, view_mode, term_size) -> str:
+        label = "" if len(ui_list) < 2 else ui_list[1]
+        label = ITable.choose_label(label)
+        print("Running problem " + label + " ...")
+        
+        Report.set_terminal_size(int(term_size))
+        param = Param.Basic().set_raw(mark_mode == "hide")
+        if view_mode == "down":
+            param.set_up_down(True)
+        param.set_diff_mode(DiffMode.ALL)
+        Actions.execute([], [label], param)
+
+        return "run " + label
+
+    @staticmethod
+    def choose_base(ui_list: List[str]) -> str:
+        if len(ui_list) == 2 and ui_list[1] in ITable.options_base:
+            return ui_list[1]
+
+        return ITable.choose("Choose database ", ITable.options_base)
+
+    @staticmethod
+    def choose_term(ui_list: List[str]) -> str:
+        if len(ui_list) == 2 and ui_list[1] in ITable.options_term:
+            return ui_list[1]
+        return ITable.choose("Choose termsize ", ITable.options_term)
+
+    @staticmethod
+    def create_default_config(configfile):
+        config = configparser.ConfigParser()
+        config["DEFAULT"] = {
+            "base": ITable.options_base[0],
+            "term": ITable.options_term[0],
+            "view": ITable.options_view[0],
+            "mark": ITable.options_mark[0],
+            "last_cmd": ""
+        }
+        with open(configfile, "w") as f:
+            config.write(f)
+
+    @staticmethod
+    def not_str(value: str) -> str:
+        if value == ITable.options_mark[0]:
+            return ITable.options_mark[1]
+        if value == ITable.options_mark[1]:
+            return ITable.options_mark[0]
+        
+        if value == ITable.options_view[0]:
+            return ITable.options_view[1]
+        if value == ITable.options_view[1]:
+            return ITable.options_view[0]
+
+    @staticmethod
+    def print_header(config):
+        
+        pad = lambda s, w: s + (w - len(s)) * " "
+
+        base  = pad(config["DEFAULT"]["base"], 4).upper()
+        term  = pad(config["DEFAULT"]["term"], 4)
+        view  = pad(config["DEFAULT"]["view"], 4).upper()
+        mark = pad(config["DEFAULT"]["mark"], 4).upper()
+        last_cmd = config["DEFAULT"]["last_cmd"]
+
+        # padding function using length
+        print("┌─────┬─────┬─────┬─────┬─────┬────┐")
+        print("│h.elp│b.ase│t.erm│v.iew│m.ark│r.un│")
+        print("├─────┼┈┈┈┈┈┼┈┈┈┈┈┼┈┈┈┈┈┼┈┈┈┈┈┼────┤")
+        print("│d.own│ {}│ {}│{} │{} │".format(base, term, view, mark) + "e.nd│");
+        print("└─────┴─────┴─────┴─────┴─────┴────┘")
+        print("(" + last_cmd + "): ", end="")
+
+    @staticmethod
+    def validate_config(config):
+        if "DEFAULT" not in config:
+            return False
+        if "base" not in config["DEFAULT"] or config["DEFAULT"]["base"] not in ITable.options_base:
+            return False
+        if "term" not in config["DEFAULT"] or config["DEFAULT"]["term"] not in ITable.options_term:
+            return False
+        if "view" not in config["DEFAULT"] or config["DEFAULT"]["view"] not in ITable.options_view:
+            return False
+        if "mark" not in config["DEFAULT"] or config["DEFAULT"]["mark"] not in ITable.options_mark:
+            return False
+        if "last_cmd" not in config["DEFAULT"]:
+            return False
+        return True
+
+    @staticmethod
+    def print_help():
+        print("Digite a letra ou o comando e aperte enter.")
+        print("h ou help: mostra esse help.")
+        print("b ou base: muda a base de dados entre as disciplinas.")
+        print("t ou term: muda a largura do terminal utilizado para mostrar os erros.")
+        print("v ou view: alterna o modo de visualização de erros entre up_down e lado_a_lado.")
+        print("m ou mark: show mostra os whitespaces e hide os esconde.")
+        print("d ou down: faz o download do problema utilizando o label e a extensão.")
+        print("r ou run : roda o problema utilizando sua solução contra os testes.")
+        print("e ou end : termina o programa.")
+        print("Na linha de execução já aparece o último comando entre (), para reexecutar basta apertar enter.")
+
+    @staticmethod
+    def search_config(filename) -> str:
+        # recursively search for config file in parent directories
+        path = os.getcwd()
+        while True:
+            configfile = os.path.join(path, filename)
+            if os.path.exists(configfile):
+                return configfile
+            if path == "/":
+                return ""
+            path = os.path.dirname(path)
+
+    @staticmethod
+    def main(_args):
+        default_config_file = ".config.ini"
+        config = configparser.ConfigParser()
+        ITable.cls()
+
+        configfile = ITable.search_config(default_config_file)
+        if configfile != "":
+            os.chdir(os.path.dirname(configfile))
+        else:
+            configfile = default_config_file
+            print("Creating default config file")
+            ITable.create_default_config(configfile)
+        
+        config.read(configfile)
+        
+        if not ITable.validate_config(config):
+            ITable.create_default_config(configfile)
+            config.read(configfile)
+
+        while True: 
+            ITable.print_header(config)
+
+            line = input()
+            if line == "":
+                line = config["DEFAULT"]["last_cmd"]
+
+            ui_list = line.split(" ")
+            cmd = ui_list[0]
+
+            if cmd == "e" or cmd == "end":
+                break
+            elif cmd == "h" or cmd == "help":
+                ITable.print_help()
+            elif cmd == "b" or cmd == "base":
+                value: str = ITable.choose_base(ui_list)
+                config["DEFAULT"]["base"] = value
+                ITable.cls()
+            elif cmd == "t" or cmd == "term":
+                config["DEFAULT"]["term"] = ITable.choose_term(ui_list)
+                ITable.cls()
+            elif cmd == "v" or cmd == "view":
+                config["DEFAULT"]["view"] = ITable.not_str(config["DEFAULT"]["view"])
+                ITable.cls()
+            elif cmd == "m" or cmd == "mark":
+                config["DEFAULT"]["mark"] = ITable.not_str(config["DEFAULT"]["mark"])
+                ITable.cls()
+            elif cmd == "d" or cmd == "down":
+                last_cmd = ITable.action_down(ui_list, config["DEFAULT"]["base"])
+                config["DEFAULT"]["last_cmd"] = last_cmd
+            elif cmd == "r" or cmd == "run":
+                last_cmd = ITable.action_run(ui_list, config["DEFAULT"]["mark"], config["DEFAULT"]["view"], config["DEFAULT"]["term"])
+                config["DEFAULT"]["last_cmd"] = last_cmd
+            else:
+                print("Invalid command")
+
+            with open(default_config_file, "w") as f:
+                config.write(f)
+
+        with open(default_config_file, "w") as f:
+            config.write(f)
+
+
+
 class Main:
     @staticmethod
     def execute(args):
@@ -1455,7 +1695,7 @@ class Main:
         PatternLoader.pattern = args.pattern
         param = Param.Basic().set_index(args.index).set_raw(args.raw)
         if args.vertical:
-            param.set_vertical(True)
+            param.set_up_down(True)
         if args.all:
             param.set_diff_mode(DiffMode.ALL)
         elif args.none:
@@ -1468,12 +1708,12 @@ class Main:
     def save_as(file_url, filename) -> bool:
         try:
             urllib.request.urlretrieve(file_url, filename)
-        except urllib.error.HTTPError as e:
+        except urllib.error.HTTPError:
             return False
         return True
 
     @staticmethod
-    def create_file(content, path, label = ""):
+    def create_file(content, path, label=""):
         with open(path, "w") as f:
             f.write(content)
         print(path, label)
@@ -1482,7 +1722,7 @@ class Main:
     def unpack_json(loaded, index):
         # extracting all files to folder
         for entry in loaded["upload"]:
-            if (entry["name"] == "vpl_evaluate.cases"):
+            if entry["name"] == "vpl_evaluate.cases":
                 Main.create_file(entry["contents"], os.path.join(index, "cases.tio"))
 
         for entry in loaded["keep"]:
@@ -1493,9 +1733,10 @@ class Main:
 
     @staticmethod
     def down(args):
-        disc = args.disc
-        index = args.index
-        ext = args.extension
+        Main.down(args.disc, args.index, args.extension)
+
+    @staticmethod
+    def down(disc, index, ext):
 
         # create dir
         if not os.path.exists(index):
@@ -1521,7 +1762,7 @@ class Main:
         Main.unpack_json(loaded, index)
 
         if len(loaded["required"]) == 0:
-            draft_path =  os.path.join(index, "solver." + ext)
+            draft_path = os.path.join(index, "solver." + ext)
             if Main.save_as(cache_url + "solver_draft." + ext, draft_path):
                 print(draft_path, "(Draft)")
             else:
@@ -1554,7 +1795,7 @@ class Main:
         return 0
 
     @staticmethod
-    def tkupdate(_args):
+    def tk_update(_args):
         tdir = tempfile.mkdtemp()
         installer = os.path.join(tdir, "installer.sh")
         cmd = ["wget", "https://raw.githubusercontent.com/senapk/tk/master/tools/install_linux.sh", "-O", installer]
@@ -1587,18 +1828,7 @@ class Main:
         parent_manip.add_argument('--pattern', '-p', metavar="@.in @.out", type=str, default='@.in @.sol',
                                   help='pattern load/save a folder, default: "@.in @.sol"')
 
-        desc = ("Roda, Converte e Contrói testes de entrada e saída.\n"
-                "Use \"./tk comando -h\" para obter informações do comando específico.\n\n"
-                "Exemplos:\n"
-                "    ./tk list t.vpl                        # lista os testes\n"
-                "    ./tk list t.vpl -d                     # mostra os testes\n"
-                "    ./tk list t.vpl -t 5                   # mostra o teste 5\n"
-                "    ./tk compile main.c                    # apenas compila o arquivo main.c para main.c.out\n"
-                "    ./tk run solver.c t.tio                # roda o comando e verifica utilizando o arquivo t.tio\n"
-                "    ./tk run solver.exe t.vpl              # roda o comando e verifica utilizando o arquivo t.vpl\n"
-                )
-
-        parser = argparse.ArgumentParser(prog='tk', description=desc)
+        parser = argparse.ArgumentParser(prog='tk')
         subparsers = parser.add_subparsers(title='subcommands', help='help for subcommand.')
 
         # list
@@ -1638,8 +1868,13 @@ class Main:
         parser_d.add_argument('extension', type=str, help="[ cpp | js | py | java | c ]")
         parser_d.set_defaults(func=Main.down)
 
+        # tk_update
         parser_tkupdate = subparsers.add_parser('tkupdate', help='update tk script(linux only).')
-        parser_tkupdate.set_defaults(func=Main.tkupdate)
+        parser_tkupdate.set_defaults(func=Main.tk_update)
+
+        # loop
+        parser_itable = subparsers.add_parser('loop', help='loop interactive mode')
+        parser_itable.set_defaults(func=ITable.main)
 
         args = parser.parse_args()
         if len(sys.argv) == 1:
@@ -1656,5 +1891,3 @@ if __name__ == '__main__':
         Main.main()
     except KeyboardInterrupt:
         Logger.write("\n\nKeyboard Interrupt\n")
-
-
